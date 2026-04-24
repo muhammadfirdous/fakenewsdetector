@@ -23,7 +23,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "/index.html"
+      "dest": "fake-news-frontend/index.html"
     }
   ]
 }
