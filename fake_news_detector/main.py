@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
@@ -19,13 +19,16 @@ app = FastAPI(title="Fake News Detector API")
 # Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this to your frontend domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.post("/analyze", response_model=AnalyzeResponse)
+# Define router for clean endpoint management
+router = APIRouter()
+
+@router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest):
     if not request.url and not request.text:
         raise HTTPException(status_code=400, detail="Either URL or text must be provided.")
@@ -71,6 +74,10 @@ async def analyze(request: AnalyzeRequest):
         fact_checks=[FactCheck(**fc) for fc in fact_checks],
         reasoning=llm_result.get("reasoning", "")
     )
+
+# Include the router both at the root and with /api prefix
+app.include_router(router)
+app.include_router(router, prefix="/api")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

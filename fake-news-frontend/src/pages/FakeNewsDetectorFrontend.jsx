@@ -152,8 +152,8 @@ function Hero({ url, setUrl, onVerify, language, setLanguage }) {
             Truth • Transparency • Trust
           </Badge>
           <h1 className="mt-8 text-5xl font-black tracking-tight text-slate-900 sm:text-7xl lg:leading-[1.1]">
-            Combat Fake News <br />
-            <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">With Artificial Intelligence</span>
+            Verify Before <br />
+            <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">You Trust</span>
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-slate-600 sm:text-xl">
             Empowering you to stay informed. Instantly verify news articles, social posts, and media using state-of-the-art claim verification technology.
