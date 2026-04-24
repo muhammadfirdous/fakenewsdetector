@@ -1,29 +1,7 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "fake-news-frontend/package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
-    },
-    {
-      "src": "fake_news_detector/main.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "fake_news_detector/main.py"
-    },
-    {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "fake-news-frontend/index.html"
-    }
+  "buildCommand": "cd fake-news-frontend && npm install && npm run build",
+  "outputDirectory": "fake-news-frontend/dist",
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api" }
   ]
 }

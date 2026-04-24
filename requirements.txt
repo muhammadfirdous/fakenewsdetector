@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+httpx
+newspaper3k
+trafilatura
+google-generativeai
+pydantic
+lxml
