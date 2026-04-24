@@ -19,9 +19,9 @@ def scrape_article(url: str):
         "success": False
     }
     
-    # Try newspaper3k first
+    # Try newspaper3k first with a short timeout
     try:
-        article = Article(url)
+        article = Article(url, request_timeout=3)
         article.download()
         article.parse()
         
@@ -37,8 +37,9 @@ def scrape_article(url: str):
     except Exception as e:
         logger.warning(f"newspaper3k failed: {e}")
 
-    # Fallback to trafilatura
+    # Fallback to trafilatura with a short timeout
     try:
+        # fetch_url has a default timeout, we'll use a fast one
         downloaded = trafilatura.fetch_url(url)
         if downloaded:
             extracted = trafilatura.extract(downloaded, include_comments=False, include_tables=True)

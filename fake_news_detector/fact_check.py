@@ -19,7 +19,7 @@ async def query_fact_check(query: str):
     }
     
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=2.0) as client:
             response = await client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
