@@ -1,0 +1,38 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "fake-news-frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
+    },
+    {
+      "src": "fake_news_detector/main.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "fake_news_detector/main.py"
+    },
+    {
+      "src": "/assets/(.*)",
+      "dest": "fake-news-frontend/assets/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "fake-news-frontend/$1",
+      "continue": true
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "fake-news-frontend/index.html"
+    }
+  ]
+}
