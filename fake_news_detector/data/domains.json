@@ -1,0 +1,52 @@
+{
+  "bbc.com": {
+    "rating": "high",
+    "bias": "center-left",
+    "description": "British Broadcasting Corporation. Highly reliable public broadcaster."
+  },
+  "reuters.com": {
+    "rating": "high",
+    "bias": "center",
+    "description": "Global news agency known for neutral reporting."
+  },
+  "apnews.com": {
+    "rating": "high",
+    "bias": "center",
+    "description": "Associated Press. Gold standard for objective news."
+  },
+  "nytimes.com": {
+    "rating": "high",
+    "bias": "left-center",
+    "description": "The New York Times. Generally high reliability with some editorial lean."
+  },
+  "wsj.com": {
+    "rating": "high",
+    "bias": "right-center",
+    "description": "The Wall Street Journal. Reliable business-focused news with right-leaning editorial."
+  },
+  "theguardian.com": {
+    "rating": "high",
+    "bias": "left",
+    "description": "The Guardian. Generally reliable with a clear left-wing perspective."
+  },
+  "foxnews.com": {
+    "rating": "mixed",
+    "bias": "right",
+    "description": "Fox News. Highly biased reporting, occasionally misleading in opinion sections."
+  },
+  "breitbart.com": {
+    "rating": "low",
+    "bias": "far-right",
+    "description": "Breitbart News. Known for sensationalism and misleading claims."
+  },
+  "infowars.com": {
+    "rating": "low",
+    "bias": "conspiracy",
+    "description": "InfoWars. Notorious for spreading conspiracy theories and misinformation."
+  },
+  "rt.com": {
+    "rating": "low",
+    "bias": "state-propaganda",
+    "description": "Russia Today. State-controlled media often used for propaganda."
+  }
+}
