@@ -19,20 +19,11 @@
       "dest": "fake_news_detector/main.py"
     },
     {
-      "src": "/assets/(.*)",
-      "dest": "fake-news-frontend/assets/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "fake-news-frontend/$1",
-      "continue": true
-    },
-    {
       "handle": "filesystem"
     },
     {
       "src": "/(.*)",
-      "dest": "fake-news-frontend/index.html"
+      "dest": "/index.html"
     }
   ]
 }
