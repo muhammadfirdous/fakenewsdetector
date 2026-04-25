@@ -4,6 +4,7 @@ python-dotenv
 httpx
 newspaper3k
 trafilatura
-google-generativeai
+openai
 pydantic
 lxml
+lxml_html_clean
