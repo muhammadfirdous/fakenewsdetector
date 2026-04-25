@@ -26,6 +26,61 @@ const LOADING_STEPS = [
   "Composing verdict",
 ];
 
+const FALLBACK_VERIFY_PHASES = [
+  { key: "extract_claims", label: "Extracting claims" },
+  { key: "source_credibility", label: "Checking source credibility" },
+  { key: "verify_claims", label: "Verifying claims against online sources" },
+  { key: "fact_check_db", label: "Searching fact-checker databases" },
+  { key: "spread", label: "Analyzing spread pattern" },
+  { key: "image_visual", label: "Analyzing image" },
+  { key: "red_flags", label: "Detecting red flags" },
+  { key: "final_verdict", label: "Generating final verdict" },
+];
+
+async function streamVerify(payload, { onEvent, signal }) {
+  const response = await fetch(`${API_URL}/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.ok) {
+    let detail = `Verification failed (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body && body.detail) detail = body.detail;
+    } catch { /* keep default */ }
+    throw new Error(detail);
+  }
+  if (!response.body) throw new Error("Streaming not supported in this environment.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sepIndex;
+    while ((sepIndex = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, sepIndex);
+      buffer = buffer.slice(sepIndex + 2);
+      const dataLines = rawEvent
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim());
+      if (!dataLines.length) continue;
+      const text = dataLines.join("\n");
+      try {
+        onEvent(JSON.parse(text));
+      } catch (e) {
+        console.warn("Bad SSE chunk:", text, e);
+      }
+    }
+  }
+}
+
 const EXAMPLES = [
   "NASA confirms the Moon is drifting away from Earth at 3.8cm per year",
   "Breaking: New study finds that 5G towers cause migraines in 80% of people",
@@ -229,10 +284,26 @@ function Footer() {
 
 // ===== Loading Overlay =====
 
-function LoadingOverlay({ step }) {
-  const stepIndex = Math.min(step, LOADING_STEPS.length - 1);
-  const stepNum = String(stepIndex + 1).padStart(2, "0");
-  const total = String(LOADING_STEPS.length).padStart(2, "0");
+function LoadingOverlay({ step, phases, currentPhase, completedPhases, errorPhases, label }) {
+  const usingPhases = Array.isArray(phases) && phases.length > 0;
+  let stepNum, total, currentLabel;
+
+  if (usingPhases) {
+    total = String(phases.length).padStart(2, "0");
+    const idx = Math.max(
+      0,
+      phases.findIndex((p) => p.key === currentPhase),
+    );
+    const completedCount = completedPhases ? completedPhases.size : 0;
+    const activeIdx = currentPhase ? idx : Math.max(0, completedCount - 1);
+    stepNum = String(Math.min(phases.length, completedCount + (currentPhase ? 1 : 0)) || 1).padStart(2, "0");
+    currentLabel = (phases[activeIdx] && phases[activeIdx].label) || phases[0].label;
+  } else {
+    const stepIndex = Math.min(step, LOADING_STEPS.length - 1);
+    stepNum = String(stepIndex + 1).padStart(2, "0");
+    total = String(LOADING_STEPS.length).padStart(2, "0");
+    currentLabel = LOADING_STEPS[stepIndex];
+  }
 
   return (
     <div className="loading-overlay">
@@ -241,9 +312,32 @@ function LoadingOverlay({ step }) {
         <div className="spinner-ring spinner-inner" />
       </div>
       <div className="loading-step">
-        STEP {stepNum}/{total} &middot; {LOADING_STEPS[stepIndex]}
+        STEP {stepNum}/{total} &middot; {currentLabel}
       </div>
-      <div className="loading-label">Analyzing your content</div>
+      <div className="loading-label">{label || "Analyzing your content"}</div>
+
+      {usingPhases && (
+        <ul className="loading-phases">
+          {phases.map((p) => {
+            const done = completedPhases && completedPhases.has(p.key);
+            const errored = errorPhases && errorPhases.has(p.key);
+            const active = currentPhase === p.key;
+            return (
+              <li
+                key={p.key}
+                className={`loading-phase ${
+                  errored ? "errored" : done ? "done" : active ? "active" : "idle"
+                }`}
+              >
+                <span className="loading-phase-dot" aria-hidden="true">
+                  {errored ? <X size={12} /> : done ? <Check size={12} /> : active ? "•" : ""}
+                </span>
+                <span className="loading-phase-label">{p.label}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
@@ -980,11 +1074,17 @@ function Results({ result, query, onBack, imagePreviewURL }) {
                 </div>
                 <div className="side-meta-row">
                   <span className="side-meta-label">Claims evaluated</span>
-                  <span className="side-meta-value">{crossrefs.length || "N/A"}</span>
+                  <span className="side-meta-value">
+                    {(result.claims_breakdown && result.claims_breakdown.length) || crossrefs.length || "N/A"}
+                  </span>
                 </div>
                 <div className="side-meta-row">
                   <span className="side-meta-label">Sources consulted</span>
-                  <span className="side-meta-value">{crossrefs.length > 0 ? crossrefs.length + "+" : "N/A"}</span>
+                  <span className="side-meta-value">
+                    {(result.all_sources && result.all_sources.length)
+                      ? result.all_sources.length
+                      : (crossrefs.length > 0 ? crossrefs.length + "+" : "N/A")}
+                  </span>
                 </div>
                 <div className="side-meta-row">
                   <span className="side-meta-label">Flags</span>
@@ -1004,7 +1104,234 @@ function Results({ result, query, onBack, imagePreviewURL }) {
         </div>
       </div>
 
+      <VerificationSections result={result} loading={false} />
+
       <ResultsChat result={result} />
+
+      {result.disclaimer && (
+        <p className="results-disclaimer">{result.disclaimer}</p>
+      )}
+    </div>
+  );
+}
+
+// ===== Verification Sections (claim breakdown, fact-checks, spread, image, sources) =====
+
+function claimVerdictPill(v) {
+  const u = (v || "").toString().toLowerCase();
+  if (u.includes("confirm")) return "pill-real";
+  if (u.includes("false") || u.includes("fake")) return "pill-fake";
+  if (u.includes("disput")) return "pill-uncertain";
+  return "pill-uncertain";
+}
+
+function ClaimBreakdownCard({ claims }) {
+  const [expanded, setExpanded] = useState(() => new Set());
+
+  if (!claims || claims.length === 0) return null;
+  const toggle = (i) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i); else next.add(i);
+      return next;
+    });
+  };
+
+  return (
+    <div className="card verify-card anim-fadeUp">
+      <div className="card-body">
+        <div className="section-header">
+          <div className="section-icon"><Layers size={16} /></div>
+          <span className="section-label">Claim-by-claim breakdown</span>
+        </div>
+        <div className="claim-list">
+          {claims.map((c, i) => {
+            const open = expanded.has(i);
+            return (
+              <div key={i} className="claim-item">
+                <button
+                  type="button"
+                  className={`claim-header ${open ? "open" : ""}`}
+                  onClick={() => toggle(i)}
+                  aria-expanded={open}
+                >
+                  <div className="claim-header-text">
+                    <span className={`pill ${claimVerdictPill(c.verdict)} font-mono claim-verdict-pill`}>
+                      {c.verdict || "Unconfirmed"} {Number.isFinite(c.confidence) ? `· ${c.confidence}%` : ""}
+                    </span>
+                    <span className="claim-text">{c.claim}</span>
+                  </div>
+                  <ChevronDown size={16} className="claim-chevron" />
+                </button>
+                {open && (
+                  <div className="claim-body">
+                    {c.reasoning && <p className="claim-reasoning">{c.reasoning}</p>}
+                    <EvidenceList title="Supporting" items={c.evidence_for} tone="real" />
+                    <EvidenceList title="Contradicting" items={c.evidence_against} tone="fake" />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EvidenceList({ title, items, tone }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className={`evidence-block evidence-${tone}`}>
+      <div className="evidence-title">{title}</div>
+      <ul className="evidence-list">
+        {items.map((it, i) => (
+          <li key={i} className="evidence-item">
+            <a
+              href={it.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="evidence-link"
+              title={it.url}
+            >
+              {it.title || it.url} <ExternalLink size={11} />
+            </a>
+            {it.snippet && <p className="evidence-snippet">{it.snippet}</p>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function FactChecksWebCard({ items }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="card verify-card anim-fadeUp">
+      <div className="card-body">
+        <div className="section-header">
+          <div className="section-icon"><ShieldCheck size={16} /></div>
+          <span className="section-label">Fact-checker results</span>
+        </div>
+        <ul className="factcheck-web-list">
+          {items.map((fc, i) => (
+            <li key={i} className="factcheck-web-item">
+              <div className="factcheck-meta">
+                <span className="factcheck-source">{fc.source}</span>
+                <span className={`pill ${claimVerdictPill(fc.status)} font-mono`} style={{ fontSize: 10 }}>
+                  {fc.status}
+                </span>
+              </div>
+              <a href={fc.url} target="_blank" rel="noopener noreferrer" className="factcheck-link">
+                {fc.claim} <ExternalLink size={12} />
+              </a>
+              {fc.snippet && <p className="factcheck-snippet">{fc.snippet}</p>}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function SpreadCard({ spread }) {
+  if (!spread || (!spread.pattern && !spread.reasoning)) return null;
+  return (
+    <div className="card verify-card anim-fadeUp">
+      <div className="card-body">
+        <div className="section-header">
+          <div className="section-icon"><Network size={16} /></div>
+          <span className="section-label">Cross-reference summary</span>
+        </div>
+        <div className="spread-stats">
+          <div className="spread-stat">
+            <span className="spread-stat-num">{spread.mainstream_count ?? 0}</span>
+            <span className="spread-stat-label">Mainstream outlets</span>
+          </div>
+          <div className="spread-stat">
+            <span className="spread-stat-num">{spread.fringe_count ?? 0}</span>
+            <span className="spread-stat-label">Other sources</span>
+          </div>
+          <div className="spread-stat">
+            <span className="spread-stat-pattern">{spread.pattern || "unknown"}</span>
+            <span className="spread-stat-label">Spread pattern</span>
+          </div>
+        </div>
+        {spread.reasoning && <p className="spread-reasoning">{spread.reasoning}</p>}
+      </div>
+    </div>
+  );
+}
+
+function ImageVisualCard({ visual }) {
+  if (!visual || (!visual.description && (!visual.claims || !visual.claims.length))) return null;
+  return (
+    <div className="card verify-card anim-fadeUp">
+      <div className="card-body">
+        <div className="section-header">
+          <div className="section-icon"><ImageIcon size={16} /></div>
+          <span className="section-label">Image analysis</span>
+        </div>
+        {visual.description && <p className="image-visual-desc">{visual.description}</p>}
+        {visual.claims && visual.claims.length > 0 && (
+          <ul className="image-visual-claims">
+            {visual.claims.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SourcesListCard({ urls }) {
+  if (!urls || urls.length === 0) return null;
+  return (
+    <div className="card verify-card anim-fadeUp">
+      <div className="card-body">
+        <div className="section-header">
+          <div className="section-icon"><Globe size={16} /></div>
+          <span className="section-label">All sources consulted</span>
+        </div>
+        <ul className="sources-list">
+          {urls.map((u, i) => {
+            let host = u;
+            try { host = new URL(u).hostname.replace(/^www\./, ""); } catch { /* keep raw */ }
+            return (
+              <li key={i}>
+                <a href={u} target="_blank" rel="noopener noreferrer" title={u}>
+                  {host} <ExternalLink size={11} />
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function VerificationSections({ result }) {
+  if (!result) return null;
+  const hasAny =
+    (result.claims_breakdown && result.claims_breakdown.length) ||
+    (result.fact_checks_web && result.fact_checks_web.length) ||
+    (result.spread_analysis && result.spread_analysis.pattern) ||
+    (result.image_visual && (result.image_visual.description || (result.image_visual.claims || []).length)) ||
+    (result.all_sources && result.all_sources.length);
+  if (!hasAny) return null;
+  return (
+    <div className="verification-stack">
+      <ClaimBreakdownCard claims={result.claims_breakdown} />
+      <FactChecksWebCard items={result.fact_checks_web} />
+      <SpreadCard spread={result.spread_analysis} />
+      <ImageVisualCard visual={result.image_visual} />
+      <SourcesListCard urls={result.all_sources} />
+      {result.search_enabled === false && (
+        <p className="search-disabled-note">
+          Web search not configured (no <code>BRAVE_SEARCH_API_KEY</code>) — verdict based on
+          AI reasoning only. Add a key to <code>.env</code> for live web verification.
+        </p>
+      )}
     </div>
   );
 }
@@ -1130,7 +1457,12 @@ export default function FakeNewsDetectorFrontend() {
   const [query, setQuery] = useState("");
   const [error, setError] = useState(null);
   const [imagePreviewURL, setImagePreviewURL] = useState(null);
+  const [verifyPhases, setVerifyPhases] = useState(FALLBACK_VERIFY_PHASES);
+  const [verifyCurrent, setVerifyCurrent] = useState(null);
+  const [verifyDone, setVerifyDone] = useState(() => new Set());
+  const [verifyErrored, setVerifyErrored] = useState(() => new Set());
   const stepInterval = useRef(null);
+  const verifyAbort = useRef(null);
 
   const setPage = useCallback((next) => {
     setPageState(next);
@@ -1160,104 +1492,195 @@ export default function FakeNewsDetectorFrontend() {
 
   const toggleDark = () => setDarkMode((d) => !d);
 
-  const analyzeContent = useCallback(async (input, mode) => {
-    setLoading(true);
-    setLoadingStep(0);
-    setError(null);
-    setQuery(input);
+  const resetVerifyProgress = useCallback(() => {
+    setVerifyPhases(FALLBACK_VERIFY_PHASES);
+    setVerifyCurrent(null);
+    setVerifyDone(new Set());
+    setVerifyErrored(new Set());
+  }, []);
 
-    // Step progression
-    stepInterval.current = setInterval(() => {
-      setLoadingStep((s) => {
-        if (s < LOADING_STEPS.length - 1) return s + 1;
-        return s;
-      });
-    }, 2500);
+  const handleVerifyEvent = useCallback((event) => {
+    const { step, status, data } = event || {};
+    if (!step) return;
 
-    try {
-      const isUrl = /^https?:\/\//i.test(input);
-      const payload = isUrl ? { url: input } : { text: input };
-
-      const response = await fetch(`${API_URL}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        throw new Error("Analysis failed. Please ensure the backend is running.");
+    if (step === "init" && status === "done") {
+      if (data && Array.isArray(data.phases) && data.phases.length) {
+        setVerifyPhases(data.phases);
       }
+      setResult((prev) => ({
+        ...(prev || {}),
+        title: data?.title || (prev && prev.title) || "",
+        domain: data?.domain || (prev && prev.domain) || "",
+        input_kind: data?.input_kind || (prev && prev.input_kind) || "text",
+        search_enabled: !!data?.search_enabled,
+        disclaimer: data?.disclaimer || (prev && prev.disclaimer) || "",
+      }));
+      return;
+    }
 
-      const data = await response.json();
-      setResult(data);
-      setPage("results");
-    } catch (err) {
-      console.error(err);
-      setError(err.message);
-      setPage("results");
-    } finally {
-      clearInterval(stepInterval.current);
-      setLoading(false);
+    if (status === "started") {
+      setVerifyCurrent(step);
+      return;
+    }
+
+    if (status === "error") {
+      setVerifyErrored((prev) => {
+        const next = new Set(prev);
+        next.add(step);
+        return next;
+      });
+      setVerifyCurrent((cur) => (cur === step ? null : cur));
+      return;
+    }
+
+    if (status === "done") {
+      setVerifyDone((prev) => {
+        const next = new Set(prev);
+        next.add(step);
+        return next;
+      });
+      setVerifyCurrent((cur) => (cur === step ? null : cur));
+
+      setResult((prev) => {
+        const base = prev || {};
+        switch (step) {
+          case "extract_claims":
+            return { ...base, entities: data?.entities || base.entities, raw_claims: data?.claims || [] };
+          case "source_credibility":
+            return {
+              ...base,
+              source_assessment: data || base.source_assessment,
+              source_credibility: {
+                domain: data?.domain || base.domain || "",
+                rating: data?.rating || "unknown",
+                bias: data?.bias || "unknown",
+                description: data?.description || data?.reasoning || "",
+              },
+            };
+          case "verify_claims":
+            return { ...base, claims_breakdown: data?.claims || [] };
+          case "fact_check_db":
+            return {
+              ...base,
+              fact_checks_web: data?.fact_checks || [],
+              fact_checks: data?.fact_checks || base.fact_checks || [],
+            };
+          case "spread":
+            return { ...base, spread_analysis: data || base.spread_analysis };
+          case "image_visual":
+            return { ...base, image_visual: data || base.image_visual };
+          case "red_flags":
+            return {
+              ...base,
+              red_flags_detailed: data?.red_flags || [],
+              red_flags: (data?.red_flags || []).map((f) =>
+                typeof f === "string" ? f : `${f.category}: ${f.description}`
+              ),
+            };
+          case "final_verdict":
+            return {
+              ...base,
+              verdict: data?.verdict || base.verdict,
+              confidence_score: data?.confidence ?? base.confidence_score ?? 0,
+              summary: data?.summary || base.summary || "",
+              reasoning: data?.reasoning || base.reasoning || "",
+            };
+          case "complete":
+            return {
+              ...base,
+              ...data,
+              red_flags: (data?.red_flags_detailed || []).map((f) =>
+                typeof f === "string" ? f : `${f.category}: ${f.description}`
+              ),
+              fact_checks: data?.fact_checks_web || base.fact_checks || [],
+              source_credibility: {
+                domain: data?.source_assessment?.domain || base.domain || "",
+                rating: data?.source_assessment?.rating || "unknown",
+                bias: data?.source_assessment?.bias || "unknown",
+                description:
+                  data?.source_assessment?.description ||
+                  data?.source_assessment?.reasoning ||
+                  "",
+              },
+            };
+          default:
+            return base;
+        }
+      });
+
+      if (step === "complete") {
+        setVerifyCurrent(null);
+      }
     }
   }, []);
 
-  const analyzeImage = useCallback(async (file, contextText, previewObjectURL) => {
+  const runVerify = useCallback(async (payload, displayQuery) => {
+    if (verifyAbort.current) {
+      try { verifyAbort.current.abort(); } catch { /* ignore */ }
+    }
+    const controller = new AbortController();
+    verifyAbort.current = controller;
+
     setLoading(true);
     setLoadingStep(0);
     setError(null);
-    setQuery(contextText ? contextText : `Image: ${file.name}`);
-    setImagePreviewURL(previewObjectURL || null);
-
-    stepInterval.current = setInterval(() => {
-      setLoadingStep((s) => {
-        if (s < LOADING_STEPS.length - 1) return s + 1;
-        return s;
-      });
-    }, 2500);
+    setQuery(displayQuery || "");
+    setResult({ verdict: "", confidence_score: 0, summary: "", reasoning: "" });
+    resetVerifyProgress();
+    setPage("results");
 
     try {
-      const base64 = await new Promise((resolve, reject) => {
+      await streamVerify(payload, {
+        onEvent: handleVerifyEvent,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      console.error(err);
+      setError(err.message || "Verification failed.");
+    } finally {
+      setLoading(false);
+      verifyAbort.current = null;
+    }
+  }, [handleVerifyEvent, resetVerifyProgress]);
+
+  const analyzeContent = useCallback(async (input, mode) => {
+    const isUrl = mode === "url" || /^https?:\/\//i.test(input);
+    const payload = isUrl
+      ? { input_kind: "url", url: input }
+      : { input_kind: "text", text: input };
+    await runVerify(payload, input);
+  }, [runVerify]);
+
+  const analyzeImage = useCallback(async (file, contextText, previewObjectURL) => {
+    setImagePreviewURL(previewObjectURL || null);
+    let base64;
+    try {
+      base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
-          const result = String(reader.result || "");
-          const comma = result.indexOf(",");
-          resolve(comma >= 0 ? result.slice(comma + 1) : result);
+          const r = String(reader.result || "");
+          const comma = r.indexOf(",");
+          resolve(comma >= 0 ? r.slice(comma + 1) : r);
         };
         reader.onerror = () => reject(new Error("Could not read file."));
         reader.readAsDataURL(file);
       });
-
-      const response = await fetch(`${API_URL}/analyze-image`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image_base64: base64,
-          mime_type: file.type || "image/png",
-          context: contextText || "",
-        }),
-      });
-
-      if (!response.ok) {
-        let detail = "Image analysis failed. Please ensure the backend is running.";
-        try {
-          const body = await response.json();
-          if (body && body.detail) detail = body.detail;
-        } catch { /* ignore */ }
-        throw new Error(detail);
-      }
-
-      const data = await response.json();
-      setResult(data);
-      setPage("results");
     } catch (err) {
-      console.error(err);
-      setError(err.message);
+      setError(err.message || "Could not read image.");
       setPage("results");
-    } finally {
-      clearInterval(stepInterval.current);
-      setLoading(false);
+      return;
     }
-  }, []);
+    await runVerify(
+      {
+        input_kind: "image",
+        image_base64: base64,
+        mime_type: file.type || "image/png",
+        context: contextText || "",
+      },
+      contextText ? contextText : `Image: ${file.name}`,
+    );
+  }, [runVerify]);
 
   const handleBack = () => {
     setResult(null);
@@ -1273,7 +1696,16 @@ export default function FakeNewsDetectorFrontend() {
     <div style={{ minHeight: "100vh", background: "var(--ivory)", color: "var(--charcoal)" }}>
       <Nav page={page} setPage={setPage} darkMode={darkMode} toggleDark={toggleDark} />
 
-      {loading && <LoadingOverlay step={loadingStep} />}
+      {loading && (
+        <LoadingOverlay
+          step={loadingStep}
+          phases={verifyPhases}
+          currentPhase={verifyCurrent}
+          completedPhases={verifyDone}
+          errorPhases={verifyErrored}
+          label="Verifying against the web"
+        />
+      )}
 
       <main>
         {page === "landing" && (

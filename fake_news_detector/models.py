@@ -52,3 +52,11 @@ class AnalyzeImageResponse(BaseModel):
     fact_checks: List[FactCheck] = []
     reasoning: Optional[str] = None
     extracted_text: Optional[str] = None
+
+class VerifyRequest(BaseModel):
+    input_kind: Literal["text", "url", "image"] = "text"
+    text: Optional[str] = None
+    url: Optional[str] = None
+    image_base64: Optional[str] = None
+    mime_type: Optional[str] = "image/png"
+    context: Optional[str] = None
