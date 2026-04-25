@@ -6,12 +6,15 @@ import os
 # Load environment variables from .env file
 load_dotenv()
 
-from models import AnalyzeRequest, AnalyzeResponse, SourceCredibility, FactCheck
+from models import (
+    AnalyzeRequest, AnalyzeResponse, SourceCredibility, FactCheck,
+    ChatRequest, ChatResponse, AnalyzeImageRequest, AnalyzeImageResponse,
+)
 from scraper import scrape_article
 from credibility import get_domain_credibility
 from fact_check import query_fact_check
 from utils import detect_red_flags
-from analyzer import analyze_with_llm
+from analyzer import analyze_with_llm, chat_about_results, analyze_image_with_llm
 import uvicorn
 
 app = FastAPI(title="Fake News Detector API")
@@ -33,7 +36,7 @@ async def analyze(request: AnalyzeRequest):
     if not request.url and not request.text:
         raise HTTPException(status_code=400, detail="Either URL or text must be provided.")
     
-    article_data = {}
+    article_data = {"title": "", "text": "", "authors": [], "domain": "", "success": False}
     if request.url:
         article_data = scrape_article(request.url)
         if not article_data["success"]:
@@ -74,6 +77,54 @@ async def analyze(request: AnalyzeRequest):
         fact_checks=[FactCheck(**fc) for fc in fact_checks],
         reasoning=llm_result.get("reasoning", "")
     )
+
+@router.post("/analyze-image", response_model=AnalyzeImageResponse)
+async def analyze_image(request: AnalyzeImageRequest):
+    if not request.image_base64 or not request.image_base64.strip():
+        raise HTTPException(status_code=400, detail="Image data is required.")
+
+    llm_result = await analyze_image_with_llm(
+        image_base64=request.image_base64,
+        context=(request.context or ""),
+        mime_type=(request.mime_type or "image/png"),
+    )
+
+    credibility_data = {
+        "domain": "",
+        "rating": "unknown",
+        "bias": "unknown",
+        "description": "Image submission — no source domain available.",
+    }
+
+    return AnalyzeImageResponse(
+        verdict=llm_result.get("verdict", "Unknown"),
+        confidence_score=int(llm_result.get("confidence_score", 0) or 0),
+        summary=llm_result.get("summary", "No summary available."),
+        red_flags=llm_result.get("red_flags", []) or [],
+        source_credibility=SourceCredibility(**credibility_data),
+        fact_checks=[],
+        reasoning=llm_result.get("reasoning", ""),
+        extracted_text=llm_result.get("extracted_text", ""),
+    )
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    if not request.question or not request.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+    if not request.results:
+        raise HTTPException(status_code=400, detail="Results context is required.")
+    try:
+        answer = await chat_about_results(
+            question=request.question.strip(),
+            history=[m.model_dump() for m in request.messages],
+            results=request.results,
+        )
+        return ChatResponse(answer=answer)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
 # Include the router both at the root and with /api prefix
 app.include_router(router)

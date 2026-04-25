@@ -1,915 +1,1316 @@
-import React, { useMemo, useState } from "react";
-import { motion } from "framer-motion";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
-  ShieldCheck,
-  Search,
-  Link as LinkIcon,
-  Image as ImageIcon,
-  Clock3,
-  Globe,
-  AlertTriangle,
-  CheckCircle2,
-  History,
-  Info,
-  Mail,
-  Upload,
-  Filter,
-  ExternalLink,
-  Languages,
-  Lock,
-  BarChart3,
-  Newspaper,
-  Video,
-  ChevronRight,
-  Loader2,
+  Search, ArrowRight, ArrowLeft, Brain, Network, ShieldCheck, Zap,
+  Globe, Book, Users, Eye, Flag, AlertTriangle, Check, X,
+  Sun, Moon, ExternalLink, Clock, Clipboard, Layers, ChevronDown,
+  Sparkles, FileText, Type, Menu, MessageCircle, Send, RotateCcw,
+  Image as ImageIcon, Upload
 } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { Badge } from "../components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { Progress } from "../components/ui/progress";
-import { Separator } from "../components/ui/separator";
-import { Textarea } from "../components/ui/textarea";
-import { Checkbox } from "../components/ui/checkbox";
-import { Label } from "../components/ui/label";
 
-const navItems = ["Home", "Results", "About", "Contact"];
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "/api" : "http://localhost:8001");
 
-const demoHistory = [
-  {
-    id: 1,
-    query: "https://news-site.example/breaking-story",
-    status: "verified",
-    time: "2026-04-22 14:20",
-  },
-  {
-    id: 2,
-    query: "https://social.example/viral-post/9281",
-    status: "unverified",
-    time: "2026-04-22 12:10",
-  },
-  {
-    id: 3,
-    query: "https://video.example/watch?v=abcd",
-    status: "verified",
-    time: "2026-04-21 20:05",
-  },
-  {
-    id: 4,
-    query: "https://image-share.example/claim.png",
-    status: "unverified",
-    time: "2026-04-21 09:42",
-  },
+const VALID_PAGES = ["landing", "how", "about", "results"];
+
+function readPageFromHash() {
+  if (typeof window === "undefined") return "landing";
+  const hash = window.location.hash.replace(/^#\/?/, "");
+  return VALID_PAGES.includes(hash) ? hash : "landing";
+}
+
+const LOADING_STEPS = [
+  "Ingesting content",
+  "Extracting claims",
+  "Contextual AI analysis",
+  "Cross-referencing sources",
+  "Scoring credibility",
+  "Composing verdict",
 ];
 
-const verifiedSources = [
-  {
-    name: "Official Government Website",
-    label: "Official",
-    type: "International",
-    date: "21 Apr 2026",
-    url: "https://official-source.example",
-  },
-  {
-    name: "BBC Monitoring",
-    label: "Media",
-    type: "International",
-    date: "21 Apr 2026",
-    url: "https://bbc.example",
-  },
-  {
-    name: "Local Independent Fact Check",
-    label: "Fact-checker",
-    type: "Independent",
-    date: "22 Apr 2026",
-    url: "https://factcheck.example",
-  },
-  {
-    name: "Regional Newsroom",
-    label: "Media",
-    type: "Local",
-    date: "21 Apr 2026",
-    url: "https://regional-news.example",
-  },
+const EXAMPLES = [
+  "NASA confirms the Moon is drifting away from Earth at 3.8cm per year",
+  "Breaking: New study finds that 5G towers cause migraines in 80% of people",
+  "Scientists discover high levels of microplastics in bottled water brands",
 ];
 
-const relatedStories = [
-  "Election rumor debunked by official publication",
-  "Original article confirms altered screenshot was misleading",
-  "Independent reviewers traced the claim to an edited repost",
-];
+// ===== Helpers =====
 
-function StatusPill({ status }) {
-  const isVerified = status === "verified";
-  return (
-    <Badge
-      className={
-        isVerified
-          ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100"
-          : "bg-red-100 text-red-700 hover:bg-red-100"
-      }
-    >
-      {isVerified ? "Verified" : "Unverified"}
-    </Badge>
-  );
+function mapVerdict(v) {
+  if (!v) return "UNCERTAIN";
+  const lower = v.toLowerCase();
+  if (lower === "true" || lower === "likely true") return "REAL";
+  if (lower === "fake" || lower === "likely fake") return "FAKE";
+  return "UNCERTAIN";
 }
 
-function StatCard({ icon: Icon, title, value, sub }) {
-  return (
-    <Card className="rounded-2xl border-slate-200 shadow-sm">
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-sm text-slate-500">{title}</p>
-            <h3 className="mt-2 text-2xl font-bold text-slate-900">{value}</h3>
-            <p className="mt-1 text-sm text-slate-500">{sub}</p>
-          </div>
-          <div className="rounded-2xl bg-slate-100 p-3">
-            <Icon className="h-5 w-5 text-slate-700" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
+function verdictLabel(v) {
+  if (v === "REAL") return "Credible.";
+  if (v === "FAKE") return "Not Credible.";
+  return "Inconclusive.";
 }
 
-function Hero({ url, setUrl, onVerify, language, setLanguage }) {
+function verdictBadge(v) {
+  if (v === "REAL") return "\u2713 VERIFIED \u00B7 REAL";
+  if (v === "FAKE") return "\u2717 FLAGGED \u00B7 FAKE";
+  return "\u2014 REVIEW \u00B7 UNCERTAIN";
+}
+
+function verdictCss(v) {
+  if (v === "REAL") return "verdict-real";
+  if (v === "FAKE") return "verdict-fake";
+  return "verdict-uncertain";
+}
+
+function pillCss(v) {
+  if (v === "REAL") return "pill-real";
+  if (v === "FAKE") return "pill-fake";
+  return "pill-uncertain";
+}
+
+function mapRedFlags(flags) {
+  if (!flags || !flags.length) return [];
+  return flags.map((f, i) => {
+    const severity = i === 0 ? "critical" : i === 1 ? "high" : "moderate";
+    const parts = f.split(":").map(s => s.trim());
+    return {
+      title: parts[0] || f,
+      desc: parts[1] || f,
+      severity,
+    };
+  });
+}
+
+function mapReasoning(r) {
+  if (!r) return [];
+  return r.split(/\n\n+/).filter(Boolean);
+}
+
+function sourceRatingBars(rating) {
+  const r = (rating || "").toLowerCase();
+  if (r === "high") return 5;
+  if (r === "mixed") return 3;
+  if (r === "low") return 1;
+  return 2;
+}
+
+function wordCount(text) {
+  if (!text) return 0;
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+// ===== Logo =====
+
+function Logo({ onClick }) {
   return (
-    <section className="relative overflow-hidden rounded-[3rem] border border-slate-200 bg-white px-6 py-14 shadow-2xl shadow-blue-500/5 sm:px-10 sm:py-20">
-      {/* Background Decor */}
-      <div className="absolute -right-24 -top-24 h-64 w-64 rounded-full bg-blue-50/50 blur-3xl" />
-      <div className="absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-emerald-50/50 blur-3xl" />
-      <div className="absolute left-1/2 top-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-50/30 blur-3xl" />
-
-      <div className="relative mx-auto max-w-5xl text-center">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
-          <Badge className="rounded-full bg-blue-50 px-5 py-1.5 text-xs font-semibold uppercase tracking-wider text-blue-600 border border-blue-100 hover:bg-blue-50">
-            Truth • Transparency • Trust
-          </Badge>
-          <h1 className="mt-8 text-5xl font-black tracking-tight text-slate-900 sm:text-7xl lg:leading-[1.1]">
-            Verify Before <br />
-            <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">You Trust</span>
-          </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-slate-600 sm:text-xl">
-            Empowering you to stay informed. Instantly verify news articles, social posts, and media using state-of-the-art claim verification technology.
-          </p>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.2, duration: 0.5 }}
-          className="mx-auto mt-12 max-w-3xl rounded-[2.5rem] border border-slate-100 bg-white/80 p-5 shadow-2xl shadow-slate-200/40 backdrop-blur-xl"
-        >
-          <div className="flex flex-col gap-4 md:flex-row">
-            <div className="relative flex-1 group">
-              <LinkIcon className="absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-blue-500" />
-              <Input
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="Paste an article URL or raw text here…"
-                className="h-16 rounded-[1.5rem] border-slate-200 bg-slate-50/50 pl-14 text-lg transition-all focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              />
-            </div>
-            <div className="flex gap-3">
-              <Button
-                onClick={onVerify}
-                disabled={!url}
-                className="h-16 rounded-[1.5rem] bg-slate-900 px-8 text-lg font-bold text-white shadow-lg transition-all hover:bg-black hover:scale-[1.02] active:scale-[0.98]"
-              >
-                <Search className="mr-3 h-5 w-5" /> Analyze
-              </Button>
-            </div>
-          </div>
-
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-4 px-2 text-sm font-medium text-slate-500">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 rounded-full border border-slate-100 bg-white px-3 py-1.5 shadow-sm">
-                <Languages className="h-4 w-4 text-blue-500" />
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="bg-transparent outline-none cursor-pointer"
-                >
-                  <option>English</option>
-                  <option>Russian</option>
-                  <option>Turkish</option>
-                </select>
-              </div>
-              <span className="flex items-center gap-1.5">
-                <Lock className="h-4 w-4 text-emerald-500" /> 
-                End-to-end Privacy
-              </span>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-blue-600 hover:underline cursor-pointer">How it works →</span>
-            </div>
-          </div>
-        </motion.div>
-
-        <div className="mt-16 grid gap-6 md:grid-cols-3">
-          {[
-            { icon: AlertTriangle, title: "Deep Analysis", text: "We scan core claims using NLP and compare them across thousands of credible sources.", color: "text-amber-500" },
-            { icon: ShieldCheck, title: "Source Integrity", text: "Get transparency on the reputation, bias, and history of the publishing domain.", color: "text-blue-500" },
-            { icon: CheckCircle2, title: "Verified Facts", text: "Direct integration with global fact-checking networks like Google and Reuters.", color: "text-emerald-500" },
-          ].map((item, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4 + i * 0.1 }}
-              className="group flex flex-col items-center p-4"
-            >
-              <div className={`mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white shadow-xl shadow-slate-200/50 transition-transform group-hover:scale-110`}>
-                <item.icon className={`h-7 w-7 ${item.color}`} />
-              </div>
-              <h3 className="text-xl font-bold text-slate-900">{item.title}</h3>
-              <p className="mt-3 text-sm leading-relaxed text-slate-500 line-clamp-2">{item.text}</p>
-            </motion.div>
-          ))}
-        </div>
+    <button className="logo" onClick={onClick} type="button">
+      <div className="logo-mark">
+        <Search />
       </div>
-    </section>
+      <span className="logo-text">TruthLens</span>
+    </button>
   );
 }
 
-function VerifiedResult({ query }) {
+// ===== Confidence Ring =====
+
+function ConfidenceRing({ value, verdict }) {
+  const r = 70;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference - (value / 100) * circumference;
+
   return (
-    <div className="space-y-6">
-      <Card className="overflow-hidden rounded-3xl border-emerald-200 shadow-sm">
-        <div className="bg-emerald-600 p-6 text-white">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-emerald-50">
-                <CheckCircle2 className="h-5 w-5" />
-                <span className="text-sm font-medium uppercase tracking-wide">Verification Status</span>
-              </div>
-              <h2 className="mt-2 text-3xl font-bold">Verified Source Found</h2>
-              <p className="mt-2 max-w-2xl text-emerald-50">
-                This content closely matches reliable reporting and traceable original publications.
-              </p>
-            </div>
-            <div className="rounded-3xl bg-white/10 p-5 backdrop-blur">
-              <p className="text-sm text-emerald-50">Match reliability</p>
-              <p className="mt-2 text-4xl font-extrabold">85%</p>
-            </div>
-          </div>
+    <div className="confidence-ring-container">
+      <div className={`confidence-ring ${verdictCss(verdict)}`}>
+        <svg viewBox="0 0 180 180">
+          <circle className="track" cx="90" cy="90" r={r} />
+          <circle
+            className="fill-ring"
+            cx="90" cy="90" r={r}
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <div className="confidence-value">
+          <span className="confidence-number">{value}%</span>
+          <span className="confidence-label">Confidence</span>
         </div>
-      </Card>
-
-      <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <Card className="rounded-3xl border-slate-200 shadow-sm">
-          <CardHeader>
-            <CardTitle>Submitted Content</CardTitle>
-            <CardDescription>Preview of the original user input</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">Submitted link</p>
-              <p className="mt-2 break-all font-medium text-slate-900">{query || "https://example.com/post/or/article"}</p>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <Newspaper className="mb-3 h-5 w-5 text-blue-600" />
-                <p className="text-sm font-medium text-slate-900">Article</p>
-                <p className="mt-1 text-sm text-slate-500">Text content analyzed</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <ImageIcon className="mb-3 h-5 w-5 text-blue-600" />
-                <p className="text-sm font-medium text-slate-900">Image cues</p>
-                <p className="mt-1 text-sm text-slate-500">Screenshot patterns checked</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <Video className="mb-3 h-5 w-5 text-blue-600" />
-                <p className="text-sm font-medium text-slate-900">Cross-platform</p>
-                <p className="mt-1 text-sm text-slate-500">Origin signals compared</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-3xl border-slate-200 shadow-sm">
-          <CardHeader>
-            <CardTitle>Original Publication Trace</CardTitle>
-            <CardDescription>Most likely credible origin</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-              <p className="text-sm text-emerald-700">Primary source</p>
-              <div className="mt-2 flex items-start justify-between gap-3">
-                <div>
-                  <h4 className="font-semibold text-slate-900">Official Government Website</h4>
-                  <p className="mt-1 text-sm text-slate-600">Originally posted on 21 Apr 2026</p>
-                </div>
-                <Button variant="outline" className="rounded-xl border-emerald-200 bg-white">
-                  <ExternalLink className="mr-2 h-4 w-4" /> Visit
-                </Button>
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-3 flex items-center gap-2 text-slate-700">
-                <Clock3 className="h-4 w-4" />
-                <span className="text-sm font-medium">Timeline</span>
-              </div>
-              <div className="space-y-3">
-                {[
-                  "Original post published on 21 Apr 2026",
-                  "Mirrored by major media outlets later that day",
-                  "Fact-checker reviewed repost variations on 22 Apr 2026",
-                ].map((t, idx) => (
-                  <div key={idx} className="flex gap-3">
-                    <div className="mt-2 h-2.5 w-2.5 rounded-full bg-emerald-500" />
-                    <p className="text-sm text-slate-600">{t}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="rounded-3xl border-slate-200 shadow-sm">
-        <CardHeader>
-          <CardTitle>Multi-Source Comparison</CardTitle>
-          <CardDescription>Showing diverse perspectives to reduce source bias</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {verifiedSources.map((source, i) => (
-              <motion.div
-                key={i}
-                whileHover={{ y: -4 }}
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <Badge variant="outline" className="rounded-full border-slate-200 text-slate-700">
-                    {source.type}
-                  </Badge>
-                  <Badge className="rounded-full bg-blue-100 text-blue-700 hover:bg-blue-100">
-                    {source.label}
-                  </Badge>
-                </div>
-                <h4 className="mt-4 font-semibold text-slate-900">{source.name}</h4>
-                <p className="mt-2 text-sm text-slate-500">Published: {source.date}</p>
-                <Button variant="link" className="mt-3 h-auto p-0 text-blue-600">
-                  Open source <ExternalLink className="ml-1 h-4 w-4" />
-                </Button>
-              </motion.div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-3xl border-slate-200 shadow-sm">
-        <CardHeader>
-          <CardTitle>Why this matters</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="max-w-4xl leading-7 text-slate-600">
-            Verification helps users distinguish original reporting from edited screenshots, recycled media, and misleading reposts. This result suggests the claim can be traced to credible publication paths, but users should still compare sources and context before sharing.
-          </p>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function UnverifiedResult({ query }) {
-  return (
-    <div className="space-y-6">
-      <Card className="overflow-hidden rounded-3xl border-red-200 shadow-sm">
-        <div className="bg-red-600 p-6 text-white">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-red-50">
-                <AlertTriangle className="h-5 w-5" />
-                <span className="text-sm font-medium uppercase tracking-wide">Verification Status</span>
-              </div>
-              <h2 className="mt-2 text-3xl font-bold">No Reliable Source Found</h2>
-              <p className="mt-2 max-w-2xl text-red-50">
-                Content may be misleading, out of context, altered, or fabricated.
-              </p>
-            </div>
-            <div className="rounded-3xl bg-white/10 p-5 backdrop-blur">
-              <p className="text-sm text-red-50">Confidence in warning</p>
-              <p className="mt-2 text-4xl font-extrabold">72%</p>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-        <Card className="rounded-3xl border-slate-200 shadow-sm">
-          <CardHeader>
-            <CardTitle>Submitted Content</CardTitle>
-            <CardDescription>Item that could not be reliably traced</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">Submitted link</p>
-              <p className="mt-2 break-all font-medium text-slate-900">{query || "https://unknown-source.example/post"}</p>
-            </div>
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-              <p className="font-medium text-amber-900">Explanation</p>
-              <p className="mt-2 text-sm leading-6 text-amber-800">
-                We could not trace this content to a credible original source. It may be a repost without context, a manipulated screenshot, or a fabricated claim.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <p className="font-medium text-slate-900">Verification limitations</p>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Image and video verification may be limited for deepfakes, cropped media, or content in unsupported languages.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-3xl border-slate-200 shadow-sm">
-          <CardHeader>
-            <CardTitle>Suggested Next Steps</CardTitle>
-            <CardDescription>Helpful guidance before sharing</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-3">
-              {[
-                "Search exact keywords in trusted media",
-                "Look for the earliest upload date or official source",
-                "Compare with fact-checking organizations",
-                "Be careful with screenshots that hide the original URL",
-              ].map((item, idx) => (
-                <div key={idx} className="flex items-start gap-3 rounded-2xl border border-slate-200 p-4">
-                  <ChevronRight className="mt-0.5 h-4 w-4 text-red-600" />
-                  <p className="text-sm text-slate-600">{item}</p>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="rounded-3xl border-slate-200 shadow-sm">
-        <CardHeader>
-          <CardTitle>Related Verified Stories</CardTitle>
-          <CardDescription>Suggested topics and similar coverage</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-3">
-            {relatedStories.map((story, i) => (
-              <div key={i} className="rounded-2xl border border-slate-200 p-4">
-                <p className="font-medium text-slate-900">{story}</p>
-                <p className="mt-2 text-sm text-slate-500">Suggested for cross-checking</p>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-3xl border-slate-200 shadow-sm">
-        <CardHeader>
-          <CardTitle>Before sharing</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="leading-7 text-slate-600">
-            Before sharing, consider verifying with trusted sources. A missing reliable match does not always mean the content is false, but it does mean users should be cautious and avoid overconfidence.
-          </p>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-
-function AboutPage() {
-  return (
-    <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-      <Card className="rounded-3xl border-slate-200 shadow-sm">
-        <CardHeader>
-          <CardTitle>About Fake News Detector</CardTitle>
-          <CardDescription>Built to combat misinformation and promote media literacy</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6 leading-7 text-slate-600">
-          <p>
-            Fake News Detector is a privacy-first verification platform designed to help users assess the credibility of online content including articles, screenshots, posts, and videos.
-          </p>
-          <div>
-            <h3 className="mb-2 font-semibold text-slate-900">How verification works</h3>
-            <p>
-              We compare submitted content with traceable publication signals, source reputation indicators, and similar coverage from multiple perspectives. Results show confidence levels instead of absolute claims.
-            </p>
-          </div>
-          <div>
-            <h3 className="mb-2 font-semibold text-slate-900">Mission</h3>
-            <p>
-              Reduce the spread of misinformation through clear design, transparent methodology, and simple user guidance for non-technical audiences.
-            </p>
-          </div>
-          <div>
-            <h3 className="mb-2 font-semibold text-slate-900">Team transparency</h3>
-            <p>
-              Presenting the people and methodology behind the platform helps build trust and encourages responsible use. Accuracy has limits, especially with edited media and unsupported languages.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="space-y-6">
-        <Card className="rounded-3xl border-slate-200 shadow-sm">
-          <CardHeader>
-            <CardTitle>Statistics</CardTitle>
-            <CardDescription>Example data visualization blocks for the platform</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div>
-              <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="text-slate-600">Viral content with misleading elements</span>
-                <span className="font-semibold text-slate-900">61%</span>
-              </div>
-              <Progress value={61} className="h-3 rounded-full" />
-            </div>
-            <div>
-              <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="text-slate-600">Users who trust screenshots without checking</span>
-                <span className="font-semibold text-slate-900">48%</span>
-              </div>
-              <Progress value={48} className="h-3 rounded-full" />
-            </div>
-            <div>
-              <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="text-slate-600">Cross-checked items with multi-source confirmation</span>
-                <span className="font-semibold text-slate-900">74%</span>
-              </div>
-              <Progress value={74} className="h-3 rounded-full" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-3xl border-slate-200 shadow-sm">
-          <CardHeader>
-            <CardTitle>Design principles</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm text-slate-600">
-            <div className="flex items-start gap-3 rounded-2xl border border-slate-200 p-4">
-              <ShieldCheck className="mt-0.5 h-4 w-4 text-blue-600" /> Trust-focused, not sensational
-            </div>
-            <div className="flex items-start gap-3 rounded-2xl border border-slate-200 p-4">
-              <Globe className="mt-0.5 h-4 w-4 text-blue-600" /> Multi-language MVP support
-            </div>
-            <div className="flex items-start gap-3 rounded-2xl border border-slate-200 p-4">
-              <BarChart3 className="mt-0.5 h-4 w-4 text-blue-600" /> Confidence-based results, not overclaiming
-            </div>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );
 }
 
-function ContactPage() {
-  const [consent, setConsent] = useState(false);
+// ===== Nav =====
 
-  return (
-    <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-      <Card className="rounded-3xl border-slate-200 shadow-sm">
-        <CardHeader>
-          <CardTitle>Contact & Feedback</CardTitle>
-          <CardDescription>Share a report, bug, or suggestion</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label>Username</Label>
-            <Input placeholder="Enter your username" className="rounded-2xl border-slate-200" />
-          </div>
-          <div className="space-y-2">
-            <Label>Date of birth</Label>
-            <Input type="date" className="rounded-2xl border-slate-200" />
-          </div>
-          <div className="space-y-2">
-            <Label>Gender (optional)</Label>
-            <Input placeholder="Optional" className="rounded-2xl border-slate-200" />
-          </div>
-          <div className="space-y-2">
-            <Label>Message</Label>
-            <Textarea placeholder="Tell us what happened or what you want to report..." className="min-h-[140px] rounded-2xl border-slate-200" />
-          </div>
-          <div className="flex items-start gap-3 rounded-2xl border border-slate-200 p-4">
-            <Checkbox checked={consent} onCheckedChange={(v) => setConsent(Boolean(v))} />
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-slate-900">Consent checkbox</p>
-              <p className="text-sm text-slate-500">I agree to submit my contact information for support purposes.</p>
-            </div>
-          </div>
-          <Button className="w-full rounded-2xl bg-blue-600 text-white hover:bg-blue-700">
-            <Mail className="mr-2 h-4 w-4" /> Send Feedback
-          </Button>
-        </CardContent>
-      </Card>
+function Nav({ page, setPage, darkMode, toggleDark }) {
+  const [menuOpen, setMenuOpen] = useState(false);
 
-      <div className="space-y-6">
-        <Card className="rounded-3xl border-slate-200 shadow-sm">
-          <CardHeader>
-            <CardTitle>Privacy-first policy</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-slate-600">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="font-medium text-slate-900">We do NOT store your search queries</p>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="font-medium text-slate-900">We do NOT track browsing behavior</p>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="font-medium text-slate-900">Only minimal profile data is collected with consent</p>
-            </div>
-          </CardContent>
-        </Card>
+  useEffect(() => { setMenuOpen(false); }, [page]);
 
-        <Card className="rounded-3xl border-slate-200 shadow-sm">
-          <CardHeader>
-            <CardTitle>Challenges & limitations</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm text-slate-600">
-            <div className="rounded-2xl border border-slate-200 p-4">False positives and negatives can happen, so confidence levels are shown instead of absolute certainty.</div>
-            <div className="rounded-2xl border border-slate-200 p-4">Source bias is reduced by displaying multiple perspectives instead of a single source.</div>
-            <div className="rounded-2xl border border-slate-200 p-4">Deepfake and edited media detection can be limited for low-quality or highly manipulated content.</div>
-            <div className="rounded-2xl border border-slate-200 p-4">Language support is intentionally limited in the MVP to improve reliability.</div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
-}
+  const NAV_ITEMS = [
+    { key: "landing", label: "Analyze" },
+    { key: "how", label: "How it works" },
+    { key: "about", label: "About" },
+  ];
 
-export default function FakeNewsDetectorFrontend() {
-  const [page, setPage] = useState("Home");
-  const [url, setUrl] = useState("");
-  const [language, setLanguage] = useState("English");
-  const [resultMode, setResultMode] = useState("verified");
-
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [analysisData, setAnalysisData] = useState(null);
-
-  const goVerify = async () => {
-    if (!url) return;
-    
-    setLoading(true);
-    setError(null);
-    setPage("Results");
-
-    try {
-      const apiUrl = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "/api" : "http://localhost:8000");
-      const response = await fetch(`${apiUrl}/analyze`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ url }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to analyze content. Please make sure the backend is running.");
-      }
-
-      const data = await response.json();
-      setAnalysisData(data);
-      setResultMode(data.verdict.toLowerCase().includes("true") ? "verified" : "unverified");
-    } catch (err) {
-      console.error(err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+  const go = (key) => {
+    setPage(key);
+    setMenuOpen(false);
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="sticky top-0 z-50 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <button onClick={() => setPage("Home")} className="flex items-center gap-3 text-left">
-            <div className="rounded-2xl bg-blue-600 p-2.5 text-white shadow-sm">
-              <ShieldCheck className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-lg font-bold tracking-tight">Fake News Detector</p>
-              <p className="text-xs text-slate-500">Verification platform</p>
-            </div>
-          </button>
-
-          <nav className="hidden items-center gap-2 md:flex">
-            {navItems.map((item) => (
-              <Button
-                key={item}
-                variant={page === item ? "default" : "ghost"}
-                onClick={() => setPage(item)}
-                className={
-                  page === item
-                    ? "rounded-2xl bg-blue-600 text-white hover:bg-blue-700"
-                    : "rounded-2xl text-slate-600 hover:bg-slate-100"
-                }
-              >
-                {item}
-              </Button>
-            ))}
-          </nav>
+    <nav className="navbar">
+      <div className="navbar-inner">
+        <Logo onClick={() => go("landing")} />
+        <div className="nav-links">
+          {NAV_ITEMS.map(({ key, label }) => (
+            <button
+              key={key}
+              className={`nav-pill ${page === key ? "active" : ""}`}
+              onClick={() => go(key)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
-      </header>
-
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {page === "Home" && (
-          <div className="space-y-8">
-            <Hero
-              url={url}
-              setUrl={setUrl}
-              onVerify={goVerify}
-              language={language}
-              setLanguage={setLanguage}
-            />
-
-            <div className="grid gap-4 md:grid-cols-4">
-              <StatCard icon={ShieldCheck} title="Verified Results" value="100%" sub="Evidence-based claim analysis" />
-              <StatCard icon={Languages} title="Coverage" value="Multi-lingual" sub="Local and global insights" />
-              <StatCard icon={Globe} title="Intelligence" value="AI Driven" sub="Gemini powered synthesis" />
-              <StatCard icon={Lock} title="Security" value="Privacy-First" sub="No data storage, fully private" />
-            </div>
+        <div className="nav-right">
+          <div className="api-pill">
+            <span className="api-dot" />
+            API online
           </div>
-        )}
+          <button className="dark-toggle" onClick={toggleDark} aria-label="Toggle dark mode">
+            {darkMode ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            className="nav-hamburger"
+            aria-label={menuOpen ? "Close navigation menu" : "Open navigation menu"}
+            aria-expanded={menuOpen}
+            aria-controls="mobile-nav-panel"
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            {menuOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+        </div>
+      </div>
+      <div
+        id="mobile-nav-panel"
+        className={`nav-mobile-panel ${menuOpen ? "open" : ""}`}
+        hidden={!menuOpen}
+      >
+        {NAV_ITEMS.map(({ key, label }) => (
+          <button
+            key={key}
+            className={`nav-mobile-link ${page === key ? "active" : ""}`}
+            onClick={() => go(key)}
+          >
+            {label}
+          </button>
+        ))}
+        <div className="nav-mobile-api">
+          <span className="api-dot" /> API online
+        </div>
+      </div>
+    </nav>
+  );
+}
 
-        {page === "Results" && (
-          <div className="space-y-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h1 className="text-3xl font-bold tracking-tight">Verification Results</h1>
-                <p className="mt-1 text-slate-500">Confidence-based output with source comparison and transparent warnings</p>
+// ===== Footer =====
+
+function Footer() {
+  return (
+    <footer className="footer">
+      <div className="container footer-inner">
+        <div className="footer-left">
+          <span>TruthLens</span> &mdash; Editorial AI for news verification.
+        </div>
+        <div className="footer-right">Built with care</div>
+      </div>
+    </footer>
+  );
+}
+
+// ===== Loading Overlay =====
+
+function LoadingOverlay({ step }) {
+  const stepIndex = Math.min(step, LOADING_STEPS.length - 1);
+  const stepNum = String(stepIndex + 1).padStart(2, "0");
+  const total = String(LOADING_STEPS.length).padStart(2, "0");
+
+  return (
+    <div className="loading-overlay">
+      <div className="spinner-container">
+        <div className="spinner-ring spinner-outer" />
+        <div className="spinner-ring spinner-inner" />
+      </div>
+      <div className="loading-step">
+        STEP {stepNum}/{total} &middot; {LOADING_STEPS[stepIndex]}
+      </div>
+      <div className="loading-label">Analyzing your content</div>
+    </div>
+  );
+}
+
+// ===== Image Panel (upload / drag-drop / paste) =====
+
+const IMAGE_ACCEPTED_MIMES = ["image/png", "image/jpeg", "image/webp"];
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+function formatBytes(n) {
+  if (!n && n !== 0) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function validateImageFile(file) {
+  if (!file) return "No file selected.";
+  if (!IMAGE_ACCEPTED_MIMES.includes(file.type)) {
+    return "Unsupported file type. Please use PNG, JPG, or WebP.";
+  }
+  if (file.size > IMAGE_MAX_BYTES) {
+    return `File is too large (${formatBytes(file.size)}). Max 5MB.`;
+  }
+  return null;
+}
+
+function ImagePanel({
+  imageFile,
+  imageURL,
+  imageContext,
+  imageError,
+  dragActive,
+  onSelectFile,
+  onClearFile,
+  onContextChange,
+  onDragStateChange,
+  active,
+}) {
+  const fileInputRef = useRef(null);
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onDragStateChange(false);
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) onSelectFile(file);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragActive) onDragStateChange(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onDragStateChange(false);
+  };
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const handlePaste = (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.kind === "file" && item.type && item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            onSelectFile(file);
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [active, onSelectFile]);
+
+  return (
+    <div className="image-panel">
+      {!imageFile ? (
+        <label
+          className={`image-drop-zone ${dragActive ? "dragging" : ""}`}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragOver}
+          onDragLeave={handleDragLeave}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/*"
+            className="image-drop-input"
+            onChange={(e) => {
+              const file = e.target.files && e.target.files[0];
+              if (file) onSelectFile(file);
+              e.target.value = "";
+            }}
+          />
+          <div className="image-drop-icon">
+            <Upload size={22} />
+          </div>
+          <div className="image-drop-title">
+            Drop a news screenshot here, or click to browse
+          </div>
+          <div className="image-drop-hint">
+            PNG, JPG or WebP &middot; max 5MB &middot; Ctrl/Cmd+V to paste
+          </div>
+        </label>
+      ) : (
+        <div className="image-preview-wrap">
+          {imageURL && (
+            <img src={imageURL} alt="Selected preview" className="image-preview" />
+          )}
+          <button
+            type="button"
+            className="image-remove-btn"
+            onClick={onClearFile}
+            aria-label="Remove image"
+          >
+            <X size={14} />
+          </button>
+          <div className="image-preview-meta">
+            <span className="image-preview-name" title={imageFile.name}>{imageFile.name}</span>
+            <span className="image-preview-size">{formatBytes(imageFile.size)}</span>
+          </div>
+        </div>
+      )}
+
+      {imageError && <div className="image-error">{imageError}</div>}
+
+      <textarea
+        className="input-textarea image-context-textarea"
+        placeholder="Add context about this image (optional)"
+        value={imageContext}
+        onChange={(e) => onContextChange(e.target.value)}
+        rows={3}
+      />
+    </div>
+  );
+}
+
+// ===== Landing Page =====
+
+function Landing({ onAnalyze, onAnalyzeImage }) {
+  const [inputMode, setInputMode] = useState("text");
+  const [inputValue, setInputValue] = useState("");
+
+  const [imageFile, setImageFile] = useState(null);
+  const [imageURL, setImageURL] = useState(null);
+  const [imageContext, setImageContext] = useState("");
+  const [imageError, setImageError] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
+
+  useEffect(() => {
+    return () => { if (imageURL) URL.revokeObjectURL(imageURL); };
+  }, [imageURL]);
+
+  const selectImageFile = useCallback((file) => {
+    const err = validateImageFile(file);
+    if (err) {
+      setImageError(err);
+      return;
+    }
+    setImageError(null);
+    setImageFile(file);
+    setImageURL((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(file);
+    });
+  }, []);
+
+  const clearImageFile = useCallback(() => {
+    setImageFile(null);
+    setImageURL((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setImageError(null);
+  }, []);
+
+  const handleSubmit = () => {
+    if (inputMode === "image") {
+      if (!imageFile) return;
+      onAnalyzeImage(imageFile, imageContext.trim(), imageURL);
+      return;
+    }
+    if (!inputValue.trim()) return;
+    onAnalyze(inputValue.trim(), inputMode);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && e.ctrlKey) handleSubmit();
+  };
+
+  const canSubmit = inputMode === "image" ? !!imageFile : !!inputValue.trim();
+
+  return (
+    <div>
+      {/* Hero */}
+      <section className="hero">
+        <div className="container">
+          <div className="eyebrow-row anim-fadeUp">
+            <span className="pill">EDITORIAL AI &middot; v1.4</span>
+            <span className="pill">Powered by MiniMax</span>
+          </div>
+
+          <h1 className="hero-title anim-fadeUp d-1">
+            Detect fake news in seconds,<br />
+            with the patience of an <em>editor.</em>
+          </h1>
+
+          <p className="hero-subtitle anim-fadeUp d-2">
+            Paste any article, headline, or URL. TruthLens reads it like a seasoned journalist
+            and gives you a clear, reasoned verdict.
+          </p>
+
+          {/* Input Block */}
+          <div className="input-block anim-scaleIn d-3">
+            <div className="input-card">
+              <div className="input-tabs">
+                {[
+                  { key: "text", icon: <FileText size={12} />, label: "TEXT" },
+                  { key: "headline", icon: <Type size={12} />, label: "HEADLINE" },
+                  { key: "url", icon: <Globe size={12} />, label: "URL" },
+                  { key: "image", icon: <ImageIcon size={12} />, label: "IMAGE" },
+                ].map((t) => (
+                  <button
+                    key={t.key}
+                    className={`input-tab ${inputMode === t.key ? "active" : ""}`}
+                    onClick={() => setInputMode(t.key)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
               </div>
-            </div>
-
-            {loading ? (
-              <div className="flex min-h-[400px] flex-col items-center justify-center rounded-3xl border border-slate-200 bg-white p-12 text-center">
-                <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
-                <h2 className="mt-4 text-xl font-semibold">Analyzing Content...</h2>
-                <p className="mt-2 text-slate-500">Comparing with credible sources and fact-check databases.</p>
-              </div>
-            ) : error ? (
-              <Card className="rounded-3xl border-red-200 bg-red-50 p-12 text-center">
-                <AlertTriangle className="mx-auto h-12 w-12 text-red-600" />
-                <h2 className="mt-4 text-xl font-semibold text-red-900">Analysis Failed</h2>
-                <p className="mt-2 text-red-700">{error}</p>
-                <Button onClick={() => setPage("Home")} className="mt-6 rounded-2xl bg-red-600 text-white hover:bg-red-700">
-                  Try Again
-                </Button>
-              </Card>
-            ) : analysisData ? (
-              <div className="space-y-6">
-                <Card className={`overflow-hidden rounded-3xl border-${resultMode === "verified" ? "emerald" : "red"}-200 shadow-sm`}>
-                  <div className={`bg-${resultMode === "verified" ? "emerald" : "red"}-600 p-6 text-white`}>
-                    <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                      <div>
-                        <div className={`flex items-center gap-2 text-${resultMode === "verified" ? "emerald" : "red"}-50`}>
-                          {resultMode === "verified" ? <CheckCircle2 className="h-5 w-5" /> : <AlertTriangle className="h-5 w-5" />}
-                          <span className="text-sm font-medium uppercase tracking-wide">Verdict: {analysisData.verdict}</span>
-                        </div>
-                        <h2 className="mt-2 text-3xl font-bold">{resultMode === "verified" ? "Verified Information" : "Potential Misinformation"}</h2>
-                        <p className={`mt-2 max-w-2xl text-${resultMode === "verified" ? "emerald" : "red"}-50`}>
-                          {analysisData.summary}
-                        </p>
-                      </div>
-                      <div className="rounded-3xl bg-white/10 p-5 backdrop-blur">
-                        <p className={`text-sm text-${resultMode === "verified" ? "emerald" : "red"}-50`}>Confidence Score</p>
-                        <p className="mt-2 text-4xl font-extrabold">{analysisData.confidence_score}%</p>
-                      </div>
-                    </div>
-                  </div>
-                </Card>
-
-                <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-                  <Card className="rounded-3xl border-slate-200 shadow-sm">
-                    <CardHeader>
-                      <CardTitle>Analysis Reasoning</CardTitle>
-                      <CardDescription>Deep dive into why this verdict was reached</CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
-                        <p className="leading-7 text-slate-700 whitespace-pre-wrap">{analysisData.reasoning}</p>
-                      </div>
-                      
-                      {analysisData.red_flags.length > 0 && (
-                        <div className="mt-4">
-                          <h4 className="mb-3 font-semibold text-slate-900">Red Flags Detected</h4>
-                          <div className="flex flex-wrap gap-2">
-                            {analysisData.red_flags.map((flag, i) => (
-                              <Badge key={i} variant="outline" className="rounded-full border-red-200 bg-red-50 text-red-700 py-1 px-3">
-                                {flag}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-
-                  <Card className="rounded-3xl border-slate-200 shadow-sm">
-                    <CardHeader>
-                      <CardTitle>Source Credibility</CardTitle>
-                      <CardDescription>Domain reputation assessment</CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      {analysisData.source_credibility ? (
-                        <div className={`rounded-2xl border border-${analysisData.source_credibility.rating === "high" ? "emerald" : "amber"}-200 bg-${analysisData.source_credibility.rating === "high" ? "emerald" : "amber"}-50 p-6`}>
-                          <div className="flex items-center justify-between mb-4">
-                             <h4 className="text-lg font-bold text-slate-900">{analysisData.source_credibility.domain}</h4>
-                             <Badge className={`rounded-full ${analysisData.source_credibility.rating === "high" ? "bg-emerald-600" : "bg-amber-600"} text-white`}>
-                                {analysisData.source_credibility.rating.toUpperCase()} Reliability
-                             </Badge>
-                          </div>
-                          <div className="grid gap-4">
-                            <div>
-                                <p className="text-xs font-semibold uppercase text-slate-400 tracking-wider">Bias Rating</p>
-                                <p className="text-sm font-medium text-slate-700 mt-1">{analysisData.source_credibility.bias}</p>
-                            </div>
-                            <div>
-                                <p className="text-xs font-semibold uppercase text-slate-400 tracking-wider">Description</p>
-                                <p className="text-sm text-slate-600 mt-1 leading-relaxed">{analysisData.source_credibility.description}</p>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 italic text-slate-500">
-                          No specific domain data available.
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                </div>
-
-                {analysisData.fact_checks.length > 0 && (
-                  <Card className="rounded-3xl border-slate-200 shadow-sm">
-                    <CardHeader>
-                      <CardTitle>Supporting Evidence & Fact Checks</CardTitle>
-                      <CardDescription>Direct findings from independent fact-checking organizations</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        {analysisData.fact_checks.map((check, i) => (
-                          <div key={i} className="rounded-2xl border border-slate-200 p-5 flex flex-col justify-between">
-                            <div>
-                              <div className="flex items-center justify-between gap-2 mb-3">
-                                <Badge variant="outline" className={`rounded-full ${check.status.toLowerCase().includes("true") ? "border-emerald-200 text-emerald-700" : "border-red-200 text-red-700"}`}>
-                                  {check.status}
-                                </Badge>
-                                <span className="text-xs text-slate-400 font-medium">{check.source}</span>
-                              </div>
-                              <p className="font-semibold text-slate-900 mt-1">"{check.claim}"</p>
-                            </div>
-                            {check.url && (
-                              <Button variant="link" className="mt-4 p-0 h-auto self-start text-blue-600" onClick={() => window.open(check.url, '_blank')}>
-                                Read Full Review <ExternalLink className="ml-1 h-3 w-3" />
-                              </Button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
+              <div className="input-body">
+                {inputMode === "image" ? (
+                  <ImagePanel
+                    active={inputMode === "image"}
+                    imageFile={imageFile}
+                    imageURL={imageURL}
+                    imageContext={imageContext}
+                    imageError={imageError}
+                    dragActive={dragActive}
+                    onSelectFile={selectImageFile}
+                    onClearFile={clearImageFile}
+                    onContextChange={setImageContext}
+                    onDragStateChange={setDragActive}
+                  />
+                ) : (
+                  <textarea
+                    className="input-textarea"
+                    placeholder={
+                      inputMode === "url"
+                        ? "Paste article URL here..."
+                        : inputMode === "headline"
+                        ? "Type a headline to verify..."
+                        : "Paste article text or claim here..."
+                    }
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    rows={4}
+                    inputMode={inputMode === "url" ? "url" : "text"}
+                    autoCapitalize={inputMode === "url" ? "off" : "sentences"}
+                    autoCorrect={inputMode === "url" ? "off" : "on"}
+                    spellCheck={inputMode !== "url"}
+                  />
                 )}
               </div>
-            ) : (
-              <div className="text-center p-12">
-                <p className="text-slate-500">No results to display. Please verify a link from the home page.</p>
-                <Button onClick={() => setPage("Home")} className="mt-4 rounded-xl">Back Home</Button>
+              <div className="input-footer">
+                <span className="word-count">
+                  {inputMode === "image"
+                    ? (imageFile ? formatBytes(imageFile.size) : "No image selected")
+                    : `${wordCount(inputValue)} words`}
+                </span>
+                <button
+                  className="btn btn-primary"
+                  disabled={!canSubmit}
+                  onClick={handleSubmit}
+                >
+                  Analyze <ArrowRight size={16} />
+                </button>
               </div>
+            </div>
+
+            {/* Example chips */}
+            <div className="example-chips">
+              {EXAMPLES.map((ex, i) => (
+                <button
+                  key={i}
+                  className="example-chip"
+                  onClick={() => { setInputValue(ex); setInputMode("text"); }}
+                  title={ex}
+                >
+                  {ex.length > 60 ? ex.slice(0, 57) + "..." : ex}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features Grid */}
+      <section className="container">
+        <div className="features-grid">
+          {[
+            { icon: <Brain size={22} />, title: "AI Reasoning", desc: "Deep contextual analysis powered by large language models." },
+            { icon: <Network size={22} />, title: "Cross-Reference", desc: "Claims verified against multiple independent sources." },
+            { icon: <ShieldCheck size={22} />, title: "Source Credibility", desc: "Domain reputation, bias rating, and factual history." },
+            { icon: <Zap size={22} />, title: "Instant Results", desc: "Full editorial-grade analysis in under 30 seconds." },
+          ].map((f, i) => (
+            <div key={i} className={`card feature-card anim-fadeUp d-${i + 1}`}>
+              <div className="feature-icon">{f.icon}</div>
+              <h4>{f.title}</h4>
+              <p>{f.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Stats Band */}
+      <section className="container">
+        <div className="stats-band anim-fadeUp">
+          <div>
+            <div className="stat-number">86%</div>
+            <p className="stat-label">of people have been exposed to<br />fake news online</p>
+          </div>
+          <div>
+            <div className="stat-number">~40%</div>
+            <p className="stat-label">of viral content contains<br />misleading information</p>
+          </div>
+        </div>
+      </section>
+
+      {/* Built For */}
+      <section className="container built-for anim-fadeUp">
+        <h2>Built for</h2>
+        <div className="built-for-grid">
+          {[
+            { icon: <Book size={22} />, title: "Journalists", desc: "Verify sources before publishing." },
+            { icon: <Users size={22} />, title: "Educators", desc: "Teach media literacy with real tools." },
+            { icon: <Eye size={22} />, title: "Curious readers", desc: "Check before you share." },
+          ].map((b, i) => (
+            <div key={i} className={`card built-for-card anim-fadeUp d-${i + 1}`}>
+              <div className="feature-icon">{b.icon}</div>
+              <h4>{b.title}</h4>
+              <p>{b.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ===== Results Chat (follow-up Q&A) =====
+
+const QA_SUGGESTIONS = [
+  "Why was this flagged?",
+  "What makes this source credible?",
+  "Summarize the reasoning in one sentence.",
+];
+
+function ResultsChat({ result }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, loading, error]);
+
+  const send = useCallback(async (textArg) => {
+    const isRetry = typeof textArg === "string";
+    const question = (isRetry ? textArg : input).trim();
+    if (!question || loading) return;
+
+    let baseMessages = messages;
+    if (!isRetry) {
+      baseMessages = [...messages, { role: "user", content: question }];
+      setMessages(baseMessages);
+      setInput("");
+    }
+    setError(null);
+    setLoading(true);
+
+    try {
+      const history = baseMessages.slice(0, -1).slice(-20);
+      const res = await fetch(`${API_URL}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, messages: history, results: result }),
+      });
+      if (!res.ok) {
+        let detail = `Request failed (${res.status})`;
+        try {
+          const body = await res.json();
+          if (body && body.detail) detail = body.detail;
+        } catch { /* keep default */ }
+        throw new Error(detail);
+      }
+      const data = await res.json();
+      setMessages((prev) => [...prev, { role: "assistant", content: data.answer }]);
+    } catch (e) {
+      setError(e.message || "Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }, [input, loading, messages, result]);
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  };
+
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+  const showEmpty = messages.length === 0 && !loading && !error;
+
+  return (
+    <div className="card qa-card anim-fadeUp">
+      <div className="card-body">
+        <div className="section-header">
+          <div className="section-icon"><MessageCircle size={16} /></div>
+          <span className="section-label">Ask a follow-up</span>
+        </div>
+
+        <div className="qa-messages" ref={scrollRef} aria-live="polite">
+          {showEmpty && (
+            <div className="qa-empty">
+              <p>Ask a question about these results. The assistant reads the verdict, reasoning, red flags, and source profile shown above.</p>
+              <div className="qa-suggestions">
+                {QA_SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className="qa-suggestion"
+                    onClick={() => send(s)}
+                    disabled={loading}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((m, i) => (
+            <div key={i} className={`qa-bubble qa-${m.role}`}>
+              {m.content}
+            </div>
+          ))}
+
+          {loading && (
+            <div className="qa-bubble qa-assistant qa-loading" aria-label="Assistant is typing">
+              <span className="qa-dot" />
+              <span className="qa-dot" />
+              <span className="qa-dot" />
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div className="qa-error" role="alert">
+            <span>{error}</span>
+            {lastUserMessage && (
+              <button
+                type="button"
+                className="qa-retry"
+                onClick={() => send(lastUserMessage.content)}
+                disabled={loading}
+              >
+                <RotateCcw size={12} /> Retry
+              </button>
             )}
           </div>
         )}
 
-        {page === "About" && <AboutPage />}
-        {page === "Contact" && <ContactPage />}
-      </main>
+        <form
+          className="qa-input-row"
+          onSubmit={(e) => { e.preventDefault(); send(); }}
+        >
+          <input
+            ref={inputRef}
+            className="qa-input"
+            type="text"
+            placeholder="Ask a question about your results..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={loading}
+            aria-label="Ask a question about your results"
+            autoComplete="off"
+          />
+          <button
+            type="submit"
+            className="btn btn-primary qa-send"
+            disabled={loading || !input.trim()}
+            aria-label="Send question"
+          >
+            <Send size={16} />
+            <span className="qa-send-label">Send</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
 
-      <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto grid max-w-7xl gap-6 px-4 py-8 text-sm text-slate-500 sm:px-6 lg:grid-cols-3 lg:px-8">
-          <div>
-            <p className="font-semibold text-slate-900">Fake News Detector</p>
-            <p className="mt-2 leading-6">
-              A concept frontend focused on trust, source transparency, and clear verification UX.
-            </p>
+// ===== Results Page =====
+
+function Results({ result, query, onBack, imagePreviewURL }) {
+  const [reasoningExpanded, setReasoningExpanded] = useState(false);
+  const verdict = mapVerdict(result.verdict);
+  const vCss = verdictCss(verdict);
+  const flags = mapRedFlags(result.red_flags);
+  const paragraphs = mapReasoning(result.reasoning);
+  const confidence = result.confidence_score || 0;
+  const source = result.source_credibility || {};
+  const crossrefs = result.fact_checks || [];
+  const now = new Date();
+  const timestamp = now.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" })
+    + " at " + now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+
+  const displayParagraphs = reasoningExpanded ? paragraphs : paragraphs.slice(0, 2);
+
+  return (
+    <div className="container" style={{ paddingTop: 40, paddingBottom: 40 }}>
+      {/* Header */}
+      <div className="results-header anim-fadeUp">
+        <div className="results-meta">
+          <span className="results-timestamp">{timestamp}</span>
+          <span className="results-excerpt" title={query}>
+            {query && query.length > 80 ? query.slice(0, 77) + "..." : query}
+          </span>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={onBack}>
+          <ArrowLeft size={14} /> Analyze another
+        </button>
+      </div>
+
+      {(imagePreviewURL || result.extracted_text) && (
+        <div className="image-result-banner anim-fadeUp">
+          {imagePreviewURL && (
+            <img
+              src={imagePreviewURL}
+              alt="Submitted screenshot"
+              className="results-image-thumb"
+            />
+          )}
+          {result.extracted_text && (
+            <div className="card extracted-text-card">
+              <div className="card-body">
+                <div className="section-header">
+                  <div className="section-icon"><Type size={16} /></div>
+                  <span className="section-label">Extracted text</span>
+                </div>
+                <p className="extracted-text-body">{result.extracted_text}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Verdict Hero Card */}
+      <div className={`verdict-card ${vCss} anim-scaleIn`}>
+        <div className="verdict-content">
+          <span className={`pill pill-verdict ${pillCss(verdict)} font-mono`}>
+            {verdictBadge(verdict)}
+          </span>
+          <h1 className="verdict-title">{verdictLabel(verdict)}</h1>
+          <p className="verdict-summary">{result.summary}</p>
+        </div>
+        <ConfidenceRing value={confidence} verdict={verdict} />
+      </div>
+
+      {/* Results Grid */}
+      <div className="results-grid">
+        <div className="results-left">
+          {/* Reasoning Card */}
+          <div className="card anim-fadeUp d-1">
+            <div className="card-body">
+              <div className="section-header">
+                <div className="section-icon"><FileText size={16} /></div>
+                <span className="section-label">The editor's notes</span>
+              </div>
+              <div className="reasoning-text">
+                {displayParagraphs.map((p, i) => (
+                  <p key={i}>{p}</p>
+                ))}
+              </div>
+              {paragraphs.length > 2 && (
+                <button
+                  className={`expandable-trigger ${reasoningExpanded ? "open" : ""}`}
+                  onClick={() => setReasoningExpanded(!reasoningExpanded)}
+                >
+                  {reasoningExpanded ? "Show less" : "Read full analysis"}
+                  <ChevronDown size={14} />
+                </button>
+              )}
+            </div>
           </div>
-          <div>
-            <p className="font-semibold text-slate-900">Languages</p>
-            <p className="mt-2">English • Russian • Persian/Dari • Arabic • Turkish</p>
+
+          {/* Red Flags Card */}
+          <div className="card anim-fadeUp d-2">
+            <div className="card-body">
+              <div className="section-header">
+                <div className="section-icon"><Flag size={16} /></div>
+                <span className="section-label">
+                  {flags.length > 0 ? "Warning signals" : "No warning signals"}
+                </span>
+              </div>
+              {flags.length > 0 ? (
+                flags.map((f, i) => (
+                  <div key={i} className={`flag-item severity-${f.severity}`}>
+                    <div>
+                      <span className={`flag-severity ${f.severity}`}>
+                        {f.severity.toUpperCase()}
+                      </span>
+                      <div className="flag-title">{f.title}</div>
+                      <div className="flag-desc">{f.desc}</div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="no-flags">
+                  <Check size={20} />
+                  <div>
+                    <p style={{ fontWeight: 600 }}>No red flags detected</p>
+                    <p>Content appears consistent and well-sourced.</p>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-          <div>
-            <p className="font-semibold text-slate-900">Disclaimer</p>
-            <p className="mt-2 leading-6">
-              Results should support critical thinking, not replace it. Verification accuracy may vary for edited media, deepfakes, and limited-source claims.
-            </p>
+
+          {/* Cross-References Card */}
+          {crossrefs.length > 0 && (
+            <div className="card anim-fadeUp d-3">
+              <div className="card-body">
+                <div className="section-header">
+                  <div className="section-icon"><Layers size={16} /></div>
+                  <span className="section-label">Cross-references</span>
+                </div>
+                {crossrefs.map((cr, i) => {
+                  const crVerdict = cr.status?.toLowerCase().includes("true") ? "REAL"
+                    : cr.status?.toLowerCase().includes("false") || cr.status?.toLowerCase().includes("fake") ? "FAKE"
+                    : "UNCERTAIN";
+                  return (
+                    <div key={i} className="crossref-card">
+                      <div className="crossref-source">{cr.source || "Source"}</div>
+                      <div className="crossref-title">"{cr.claim}"</div>
+                      <div className="crossref-meta">
+                        <span className={`pill ${pillCss(crVerdict)}`} style={{ fontSize: 10 }}>
+                          {cr.status}
+                        </span>
+                        {cr.url && (
+                          <a href={cr.url} target="_blank" rel="noopener noreferrer"
+                            style={{ color: "var(--terracotta)", fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
+                            View <ExternalLink size={12} />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="results-right">
+          {/* Source Card */}
+          <div className="card anim-fadeUp d-2">
+            <div className="card-body">
+              <div className="section-header">
+                <div className="section-icon"><Globe size={16} /></div>
+                <span className="section-label">Source profile</span>
+              </div>
+              <div className="source-domain">{source.domain || "Unknown domain"}</div>
+              <div className="bar-meter">
+                {[1,2,3,4,5].map((n) => {
+                  const bars = sourceRatingBars(source.rating);
+                  const rating = (source.rating || "").toLowerCase();
+                  let cls = "";
+                  if (n <= bars) {
+                    cls = rating === "high" ? "filled" : rating === "low" ? "filled-low" : "filled-mixed";
+                  }
+                  return <div key={n} className={`bar-segment ${cls}`} />;
+                })}
+              </div>
+              <dl className="source-details">
+                {source.rating && (
+                  <div className="source-detail">
+                    <dt>Reputation</dt>
+                    <dd>{source.rating}</dd>
+                  </div>
+                )}
+                {source.bias && (
+                  <div className="source-detail">
+                    <dt>Bias</dt>
+                    <dd>{source.bias}</dd>
+                  </div>
+                )}
+                {source.description && (
+                  <div className="source-detail">
+                    <dt>Description</dt>
+                    <dd style={{ fontSize: 13, fontWeight: 400, maxWidth: 200 }}>{source.description}</dd>
+                  </div>
+                )}
+              </dl>
+            </div>
+          </div>
+
+          {/* Side Card */}
+          <div className="card anim-fadeUp d-3">
+            <div className="card-body">
+              <div className="section-header">
+                <div className="section-icon"><Sparkles size={16} /></div>
+                <span className="section-label">Analysis metadata</span>
+              </div>
+              <div className="side-meta">
+                <div className="side-meta-row">
+                  <span className="side-meta-label">Model</span>
+                  <span className="side-meta-value">MiniMax</span>
+                </div>
+                <div className="side-meta-row">
+                  <span className="side-meta-label">Claims evaluated</span>
+                  <span className="side-meta-value">{crossrefs.length || "N/A"}</span>
+                </div>
+                <div className="side-meta-row">
+                  <span className="side-meta-label">Sources consulted</span>
+                  <span className="side-meta-value">{crossrefs.length > 0 ? crossrefs.length + "+" : "N/A"}</span>
+                </div>
+                <div className="side-meta-row">
+                  <span className="side-meta-label">Flags</span>
+                  <span className="side-meta-value">{flags.length}</span>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <span className="side-meta-label" style={{ display: "block", marginBottom: 8 }}>Confidence trend</span>
+                  <div className="sparkline">
+                    {[40, 55, 65, 50, 70, 75, 60, confidence, confidence].map((v, i) => (
+                      <div key={i} className="sparkline-bar" style={{ height: `${Math.max(v * 0.24, 4)}px` }} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </footer>
+      </div>
+
+      <ResultsChat result={result} />
+    </div>
+  );
+}
+
+// ===== How It Works =====
+
+function HowItWorks() {
+  return (
+    <div className="container">
+      <section className="how-hero anim-fadeUp">
+        <h1>How TruthLens reads an article.</h1>
+        <p className="hero-subtitle" style={{ marginTop: 16 }}>
+          Every piece of content goes through a multi-step editorial pipeline.
+        </p>
+      </section>
+
+      <div className="steps-grid">
+        {[
+          { icon: <Clipboard size={22} />, num: "01", title: "Ingest", desc: "Content is parsed and normalized from any format: URL, text, or headline." },
+          { icon: <Brain size={22} />, num: "02", title: "Analyze", desc: "AI extracts core claims and evaluates them against known patterns." },
+          { icon: <Network size={22} />, num: "03", title: "Cross-reference", desc: "Claims are verified against independent fact-checking databases." },
+          { icon: <FileText size={22} />, num: "04", title: "Verdict", desc: "A reasoned editorial verdict is composed with confidence scoring." },
+        ].map((s, i) => (
+          <div key={i} className={`card step-card anim-fadeUp d-${i + 1}`}>
+            <div className="step-number">Step {s.num}</div>
+            <div className="step-icon">{s.icon}</div>
+            <h4>{s.title}</h4>
+            <p>{s.desc}</p>
+          </div>
+        ))}
+      </div>
+
+      <section className="dont-section anim-fadeUp">
+        <h2>What we don't do</h2>
+        <div className="dont-grid">
+          {[
+            { icon: <X size={22} />, title: "No censorship", desc: "We never remove or block content. We only inform." },
+            { icon: <Eye size={22} />, title: "No tracking", desc: "Your queries are not stored, logged, or sold." },
+            { icon: <AlertTriangle size={22} />, title: "No absolutes", desc: "We present confidence levels, not binary truth claims." },
+          ].map((d, i) => (
+            <div key={i} className={`card dont-card anim-fadeUp d-${i + 1}`}>
+              <div className="feature-icon">{d.icon}</div>
+              <h4>{d.title}</h4>
+              <p>{d.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ===== About =====
+
+function About() {
+  return (
+    <div className="container">
+      <section className="about-hero anim-fadeUp">
+        <h1>A tool built by people<br />who miss the old newsroom.</h1>
+      </section>
+
+      <div className="about-grid anim-fadeUp d-1">
+        <div className="about-body">
+          <p className="about-lead">
+            TruthLens was born from a simple frustration: the best editorial instincts
+            should not be locked behind paywalls and newsroom doors.
+          </p>
+          <p>
+            We built this tool to give everyone access to the kind of rigorous, multi-source
+            verification that used to happen only in professional newsrooms. Every analysis
+            follows the same editorial standards: source the claim, check the source, weigh
+            the evidence, and present the findings transparently.
+          </p>
+          <p>
+            Our AI does not replace human judgment. It augments it. Think of TruthLens as a
+            tireless research assistant that reads faster than you can, but always shows its
+            work so you can make the final call.
+          </p>
+        </div>
+        <div className="card about-sidebar">
+          <div className="card-body">
+            <dl className="about-meta">
+              <div>
+                <dt>Version</dt>
+                <dd>1.4 (Editorial)</dd>
+              </div>
+              <div>
+                <dt>Engine</dt>
+                <dd>MiniMax LLM</dd>
+              </div>
+              <div>
+                <dt>Sources</dt>
+                <dd>Multi-database</dd>
+              </div>
+              <div>
+                <dt>Privacy</dt>
+                <dd>No data stored</dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+      </div>
+
+      <div className="stats-band about-quote-band anim-fadeUp d-2" style={{ gridTemplateColumns: "1fr", padding: "48px 32px" }}>
+        <div>
+          <p className="about-quote" style={{ color: "var(--cream)" }}>
+            "The best fact-check is the one that happens before you hit share."
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== Main App =====
+
+export default function FakeNewsDetectorFrontend() {
+  const [page, setPageState] = useState(readPageFromHash);
+  const [darkMode, setDarkMode] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState(0);
+  const [result, setResult] = useState(null);
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState(null);
+  const [imagePreviewURL, setImagePreviewURL] = useState(null);
+  const stepInterval = useRef(null);
+
+  const setPage = useCallback((next) => {
+    setPageState(next);
+    const target = `#${next}`;
+    if (window.location.hash !== target) {
+      window.history.pushState(null, "", target);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => setPageState(readPageFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    window.addEventListener("popstate", onHashChange);
+    if (!window.location.hash) {
+      window.history.replaceState(null, "", "#landing");
+    }
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+      window.removeEventListener("popstate", onHashChange);
+    };
+  }, []);
+
+  // Dark mode
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+  }, [darkMode]);
+
+  const toggleDark = () => setDarkMode((d) => !d);
+
+  const analyzeContent = useCallback(async (input, mode) => {
+    setLoading(true);
+    setLoadingStep(0);
+    setError(null);
+    setQuery(input);
+
+    // Step progression
+    stepInterval.current = setInterval(() => {
+      setLoadingStep((s) => {
+        if (s < LOADING_STEPS.length - 1) return s + 1;
+        return s;
+      });
+    }, 2500);
+
+    try {
+      const isUrl = /^https?:\/\//i.test(input);
+      const payload = isUrl ? { url: input } : { text: input };
+
+      const response = await fetch(`${API_URL}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error("Analysis failed. Please ensure the backend is running.");
+      }
+
+      const data = await response.json();
+      setResult(data);
+      setPage("results");
+    } catch (err) {
+      console.error(err);
+      setError(err.message);
+      setPage("results");
+    } finally {
+      clearInterval(stepInterval.current);
+      setLoading(false);
+    }
+  }, []);
+
+  const analyzeImage = useCallback(async (file, contextText, previewObjectURL) => {
+    setLoading(true);
+    setLoadingStep(0);
+    setError(null);
+    setQuery(contextText ? contextText : `Image: ${file.name}`);
+    setImagePreviewURL(previewObjectURL || null);
+
+    stepInterval.current = setInterval(() => {
+      setLoadingStep((s) => {
+        if (s < LOADING_STEPS.length - 1) return s + 1;
+        return s;
+      });
+    }, 2500);
+
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || "");
+          const comma = result.indexOf(",");
+          resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        };
+        reader.onerror = () => reject(new Error("Could not read file."));
+        reader.readAsDataURL(file);
+      });
+
+      const response = await fetch(`${API_URL}/analyze-image`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_base64: base64,
+          mime_type: file.type || "image/png",
+          context: contextText || "",
+        }),
+      });
+
+      if (!response.ok) {
+        let detail = "Image analysis failed. Please ensure the backend is running.";
+        try {
+          const body = await response.json();
+          if (body && body.detail) detail = body.detail;
+        } catch { /* ignore */ }
+        throw new Error(detail);
+      }
+
+      const data = await response.json();
+      setResult(data);
+      setPage("results");
+    } catch (err) {
+      console.error(err);
+      setError(err.message);
+      setPage("results");
+    } finally {
+      clearInterval(stepInterval.current);
+      setLoading(false);
+    }
+  }, []);
+
+  const handleBack = () => {
+    setResult(null);
+    setError(null);
+    if (imagePreviewURL) {
+      URL.revokeObjectURL(imagePreviewURL);
+      setImagePreviewURL(null);
+    }
+    setPage("landing");
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "var(--ivory)", color: "var(--charcoal)" }}>
+      <Nav page={page} setPage={setPage} darkMode={darkMode} toggleDark={toggleDark} />
+
+      {loading && <LoadingOverlay step={loadingStep} />}
+
+      <main>
+        {page === "landing" && (
+          <Landing onAnalyze={analyzeContent} onAnalyzeImage={analyzeImage} />
+        )}
+
+        {page === "results" && !loading && (
+          error ? (
+            <div className="container" style={{ paddingTop: 80 }}>
+              <div className="card error-card anim-scaleIn">
+                <AlertTriangle size={40} style={{ color: "var(--fake)" }} />
+                <h3>Analysis Failed</h3>
+                <p>{error}</p>
+                <button className="btn btn-primary" onClick={handleBack}>
+                  <ArrowLeft size={14} /> Try again
+                </button>
+              </div>
+            </div>
+          ) : result ? (
+            <Results result={result} query={query} onBack={handleBack} imagePreviewURL={imagePreviewURL} />
+          ) : (
+            <div className="container" style={{ paddingTop: 80, textAlign: "center" }}>
+              <div className="card error-card">
+                <p style={{ color: "var(--stone)" }}>No results to display.</p>
+                <button className="btn btn-ghost" onClick={handleBack} style={{ marginTop: 16 }}>
+                  <ArrowLeft size={14} /> Go back
+                </button>
+              </div>
+            </div>
+          )
+        )}
+
+        {page === "how" && <HowItWorks />}
+        {page === "about" && <About />}
+      </main>
+
+      <Footer />
     </div>
   );
 }

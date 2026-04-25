@@ -11,7 +11,7 @@ def detect_red_flags(title: str, text: str, authors: list):
         r"stop what you['’]re doing",
         r"this one trick",
         r"experts hate",
-        r"??!"
+        r"\?\?!"
     ]
     
     combined_content = (title + " " + text).lower()
